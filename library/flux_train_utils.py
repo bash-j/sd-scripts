@@ -13,6 +13,8 @@ from transformers import CLIPTextModel
 from tqdm import tqdm
 from PIL import Image
 from safetensors.torch import save_file
+from diffusers import FlowMatchEulerDiscreteScheduler
+from diffusers.configuration_utils import register_to_config
 
 from library import flux_models, flux_utils, strategy_base, train_util
 from library.device_utils import init_ipex, clean_memory_on_device
@@ -406,6 +408,27 @@ def compute_loss_weighting_for_sd3(weighting_scheme: str, sigmas=None):
         weighting = torch.ones_like(sigmas)
     return weighting
 
+def get_schnell_sigmas(num_steps=8, sigma_min=0.002, sigma_max=1.0, rho=3.0, device='cuda'):
+    """
+    Returns 8 sigma values corresponding to a compressed 1000-step diffusion schedule
+    using a nonlinear SGM/DDIM-like formulation.
+    """
+    steps = torch.linspace(0, 1, num_steps, device=device)
+    sigmas = (sigma_max**(1/rho) * (1 - steps) + sigma_min**(1/rho) * steps) ** rho
+    return sigmas  # size [8]
+
+class SchnellScheduler(FlowMatchEulerDiscreteScheduler):
+    @register_to_config
+    def __init__(self, num_train_timesteps: int = 1000, rho: float = 3.0, device='cuda'):
+        # Call parent init
+        super().__init__(num_train_timesteps=num_train_timesteps)
+        
+        # Get the 8 sigma values for the schedule
+        self.sigmas = get_schnell_sigmas(num_steps=8, device=device, rho=rho)
+        
+        # Set min and max sigmas for the schedule
+        self.sigma_min = self.sigmas[-1].item()
+        self.sigma_max = self.sigmas[0].item()
 
 def get_noisy_model_input_and_timesteps(
     args, noise_scheduler, latents: torch.Tensor, noise: torch.Tensor, device, dtype
@@ -413,14 +436,23 @@ def get_noisy_model_input_and_timesteps(
     bsz, _, h, w = latents.shape
     assert bsz > 0, "Batch size not large enough"
     num_timesteps = noise_scheduler.config.num_train_timesteps
-    if args.timestep_sampling == "uniform" or args.timestep_sampling == "sigmoid":
+    # If using SchnellScheduler, use its sigmas directly
+    if isinstance(noise_scheduler, SchnellScheduler):
+        # Repeat sigmas to match batch size if needed
+        sigmas = noise_scheduler.sigmas.to(device=device, dtype=dtype)
+        # If batch size > number of sigmas, repeat or sample as needed
+        if bsz != sigmas.shape[0]:
+            # Repeat or tile to match batch size
+            repeats = (bsz + sigmas.shape[0] - 1) // sigmas.shape[0]
+            sigmas = sigmas.repeat(repeats)[:bsz]
+        timesteps = torch.arange(bsz, device=device, dtype=dtype)
+    elif args.timestep_sampling == "uniform" or args.timestep_sampling == "sigmoid":
         # Simple random sigma-based noise sampling
         if args.timestep_sampling == "sigmoid":
             # https://github.com/XLabs-AI/x-flux/tree/main
             sigmas = torch.sigmoid(args.sigmoid_scale * torch.randn((bsz,), device=device))
         else:
             sigmas = torch.rand((bsz,), device=device)
-
         timesteps = sigmas * num_timesteps
     elif args.timestep_sampling == "shift":
         shift = args.discrete_flow_shift

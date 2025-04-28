@@ -959,7 +959,8 @@ def convert_vae_state_dict(vae_state_dict):
 
 
 def is_safetensors(path):
-    return os.path.splitext(path)[1].lower() == ".safetensors"
+    ext = os.path.splitext(path)[1].lower()
+    return ext in (".safetensors", ".sft")
 
 
 def load_checkpoint_with_text_encoder_conversion(ckpt_path, device="cpu"):

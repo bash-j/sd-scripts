@@ -3062,12 +3062,20 @@ def cache_batch_latents(
     img_tensors = img_tensors.to(device=vae.device, dtype=vae.dtype)
 
     with torch.no_grad():
-        latents = vae.encode(img_tensors).latent_dist.sample().to("cpu")
+        encoded = vae.encode(img_tensors)
+        if hasattr(encoded, "latent_dist"):
+            latents = encoded.latent_dist.sample().to("cpu")
+        else:
+            latents = encoded.to("cpu")
 
     if flip_aug:
         img_tensors = torch.flip(img_tensors, dims=[3])
         with torch.no_grad():
-            flipped_latents = vae.encode(img_tensors).latent_dist.sample().to("cpu")
+            encoded_flip = vae.encode(img_tensors)
+            if hasattr(encoded_flip, "latent_dist"):
+                flipped_latents = encoded_flip.latent_dist.sample().to("cpu")
+            else:
+                flipped_latents = encoded_flip.to("cpu")
     else:
         flipped_latents = [None] * len(latents)
 

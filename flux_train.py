@@ -31,7 +31,8 @@ init_ipex()
 
 from accelerate.utils import set_seed
 from library import deepspeed_utils, flux_train_utils, flux_utils, strategy_base, strategy_flux
-from library.sd3_train_utils import FlowMatchEulerDiscreteScheduler
+#from library.sd3_train_utils import FlowMatchEulerDiscreteScheduler
+from diffusers import FlowMatchEulerDiscreteScheduler
 
 import library.train_util as train_util
 
@@ -273,6 +274,17 @@ def train(args):
     _, flux = flux_utils.load_flow_model(
         args.pretrained_model_name_or_path, weight_dtype, "cpu", args.disable_mmap_load_safetensors
     )
+
+    # freeze parameters that break the time distillation for schnell model
+    if is_schnell:
+        for name, param in flux.named_parameters():
+            # Freeze if "mod" in name, or if not in double/single_blocks and "time_in" in name
+            if ("mod" in name) or (
+                not name.startswith("double_blocks")
+                and not name.startswith("single_blocks")
+                and "time_in" in name
+            ):
+                param.requires_grad = False
 
     if args.gradient_checkpointing:
         flux.enable_gradient_checkpointing(cpu_offload=args.cpu_offload_checkpointing)
@@ -552,7 +564,10 @@ def train(args):
     progress_bar = tqdm(range(args.max_train_steps), smoothing=0, disable=not accelerator.is_local_main_process, desc="steps")
     global_step = 0
 
-    noise_scheduler = FlowMatchEulerDiscreteScheduler(num_train_timesteps=1000, shift=args.discrete_flow_shift)
+    if is_schnell:
+        noise_scheduler = flux_train_utils.SchnellScheduler(num_train_timesteps=1000)
+    else:
+        noise_scheduler = FlowMatchEulerDiscreteScheduler(num_train_timesteps=1000, shift=args.discrete_flow_shift)
     noise_scheduler_copy = copy.deepcopy(noise_scheduler)
 
     if accelerator.is_main_process:

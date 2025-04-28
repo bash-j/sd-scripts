@@ -12,6 +12,11 @@ import cv2
 import torch
 from library.device_utils import init_ipex, get_preferred_device
 
+try:
+    import library.flux_utils as flux_utils
+except ImportError:
+    flux_utils = None
+
 init_ipex()
 
 from torchvision import transforms
@@ -86,9 +91,32 @@ def main(args):
     elif args.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
-    vae = model_util.load_vae(args.model_name_or_path, weight_dtype)
-    vae.eval()
-    vae.to(DEVICE, dtype=weight_dtype)
+    # Load VAE/AE
+    vae = None
+    if args.is_flux:
+        if flux_utils is None:
+             logger.error("Flux utils not found. Cannot load Flux AE.")
+             return
+        if not args.vae:
+            logger.error("--vae argument is required when --is_flux is set.")
+            return
+        logger.info(f"Loading Flux AE from: {args.vae}")
+        # Assuming disable_mmap_load_safetensors is not needed or handled elsewhere for this script
+        # Adjust the loading call as needed based on flux_utils.load_ae signature and requirements
+        vae = flux_utils.load_ae(args.vae, weight_dtype, "cpu", False) # Assuming mmap is false for simplicity here
+        vae.eval()
+        vae.to(DEVICE, dtype=weight_dtype)
+    else:
+        # Use provided VAE path if available, otherwise use model path
+        vae_path = args.vae if args.vae else args.model_name_or_path
+        logger.info(f"Loading VAE from: {vae_path}")
+        vae = model_util.load_vae(vae_path, weight_dtype)
+        vae.eval()
+        vae.to(DEVICE, dtype=weight_dtype)
+
+    if vae is None:
+        logger.error("Failed to load VAE/AE.")
+        return
 
     # bucketのサイズを計算する
     max_reso = tuple([int(t) for t in args.max_resolution.split(",")])
@@ -213,6 +241,14 @@ def setup_parser() -> argparse.ArgumentParser:
     parser.add_argument("in_json", type=str, help="metadata file to input / 読み込むメタデータファイル")
     parser.add_argument("out_json", type=str, help="metadata file to output / メタデータファイル書き出し先")
     parser.add_argument("model_name_or_path", type=str, help="model name or path to encode latents / latentを取得するためのモデル")
+    parser.add_argument(
+        "--vae", type=str, default=None, help="path to VAE model if different from main model / VAEモデルのパス（メインモデルと別の場合）"
+    )
+    parser.add_argument(
+        "--is_flux",
+        action="store_true",
+        help="Signal that the model is a Flux model to use specific AE loading.",
+    )
     parser.add_argument(
         "--v2", action="store_true", help="not used (for backward compatibility) / 使用されません（互換性のため残してあります）"
     )
