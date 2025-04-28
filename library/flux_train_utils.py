@@ -445,7 +445,7 @@ def get_noisy_model_input_and_timesteps(
             # Repeat or tile to match batch size
             repeats = (bsz + sigmas.shape[0] - 1) // sigmas.shape[0]
             sigmas = sigmas.repeat(repeats)[:bsz]
-        timesteps = torch.arange(bsz, device=device, dtype=dtype)
+        timesteps = sigmas * num_timesteps
     elif args.timestep_sampling == "uniform" or args.timestep_sampling == "sigmoid":
         # Simple random sigma-based noise sampling
         if args.timestep_sampling == "sigmoid":

@@ -275,6 +275,11 @@ def train(args):
         args.pretrained_model_name_or_path, weight_dtype, "cpu", args.disable_mmap_load_safetensors
     )
 
+    if args.gradient_checkpointing:
+        flux.enable_gradient_checkpointing(cpu_offload=args.cpu_offload_checkpointing)
+
+    flux.requires_grad_(True)
+
     # freeze parameters that break the time distillation for schnell model
     if is_schnell:
         for name, param in flux.named_parameters():
@@ -283,13 +288,25 @@ def train(args):
                 not name.startswith("double_blocks")
                 and not name.startswith("single_blocks")
                 and "time_in" in name
+            ) or (
+                not name.startswith("double_blocks")
+                and not name.startswith("single_blocks")
+                and "vector_in" in name
             ):
                 param.requires_grad = False
+    
+    double_block_indices = train_util.parse_block_indices(getattr(args, "train_double_block_indices", "all"), 19)
+    single_block_indices = train_util.parse_block_indices(getattr(args, "train_single_block_indices", "all"), 38)
 
-    if args.gradient_checkpointing:
-        flux.enable_gradient_checkpointing(cpu_offload=args.cpu_offload_checkpointing)
-
-    flux.requires_grad_(True)
+    for name, param in flux.named_parameters():
+        if name.startswith("double_blocks."):
+            idx = int(name.split(".")[1])
+            if idx not in double_block_indices:
+                param.requires_grad = False
+        elif name.startswith("single_blocks."):
+            idx = int(name.split(".")[1])
+            if idx not in single_block_indices:
+                param.requires_grad = False
 
     # block swap
 
@@ -354,6 +371,8 @@ def train(args):
             named_parameters = list(flux.named_parameters())
             assert len(named_parameters) == len(group["params"]), "number of parameters does not match"
             for p, np in zip(group["params"], named_parameters):
+                if not p.requires_grad:
+                    continue # skip frozen parameters
                 # determine target layer and block index for each parameter
                 block_type = "other"  # double, single or other
                 if np[0].startswith("double_blocks"):

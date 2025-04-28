@@ -6569,3 +6569,21 @@ class LossRecorder:
             return 0
         return self.loss_total / losses
 
+def parse_block_indices(indices_str, max_idx):
+    """
+    Parses a string like '0,1,4-5,7' or 'all' or 'none' into a set of indices.
+    """
+    indices_str = indices_str.strip().lower()
+    if indices_str == "all":
+        return set(range(max_idx))
+    if indices_str == "none" or indices_str == "":
+        return set()
+    indices = set()
+    for part in indices_str.split(","):
+        part = part.strip()
+        if "-" in part:
+            start, end = part.split("-")
+            indices.update(range(int(start), int(end) + 1))
+        else:
+            indices.add(int(part))
+    return indices
